@@ -1,0 +1,465 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  email     String   @unique
+  password  String
+  firstName String
+  lastName  String
+  phone     String?
+  avatar    String?
+  role      UserRole @default(STUDENT)
+  isActive  Boolean  @default(true)
+  refreshToken String? // For storing refresh tokens
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Purchase history - stored as array of purchased courses with payment details
+  purchaseHistory Json[] @default([]) // Array of { courseId, orderId, amount, purchasedAt, paymentStatus }
+
+  // User course enrollments - stored as array
+  enrollments UserCourseEnrollment[]
+  
+  // User orders
+  orders      Order[]
+  
+  // Video upload jobs
+  videoUploadJobs VideoUploadJob[]
+
+  @@map("users")
+}
+
+model Course {
+  id           String      @id @default(auto()) @map("_id") @db.ObjectId
+  title        String
+  description  String
+  shortDescription String?   // Brief description for cards
+  price        Float
+  originalPrice Float?
+  duration     String
+  level        CourseLevel
+  category     String
+  thumbnail    String
+  instructor   String
+  instructorBio String?    // Instructor background
+  rating       Float       @default(0)
+  studentsCount Int        @default(0)
+  
+  // Course scheduling and availability
+  spotsLeft    Int?        @default(7)     // Available spots for enrollment
+  nextCohort   String?     @default("Next batch starting soon (date TBC)") // Next cohort start date/info
+  
+  // Course features and skills
+  features     String[]    // What you'll learn
+  skills       String[]    // Skills gained (SQL, Python, etc.)
+  tools        String[]    // Tools used (Power BI, Tableau, etc.)
+  
+  // Course outcomes and career info
+  outcomes     String[]    // What you'll be able to do
+  careerPaths  String[]    // Career opportunities
+  jobTitles    String[]    // Potential job titles
+  
+  // Course structure
+  totalModules Int         @default(0)
+  totalLessons Int         @default(0)
+  totalHours   String?     // Total course hours
+  
+  // Prerequisites and requirements
+  prerequisites String[]   // What students need before starting
+  requirements String[]    // Technical requirements
+  
+  // Course support and extras
+  careerSupport String[]   // Career support features
+  certification Boolean    @default(false)
+  certificateName String? // Certificate title
+  
+  // FAQ and additional info
+  faqs         Json[]      // Frequently asked questions
+  highlights   String[]    // Key highlights
+  
+  status       CourseStatus @default(DRAFT)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  // Course modules - stored as array
+  modules      CourseModule[]
+  
+  // Course enrollments
+  enrollments  UserCourseEnrollment[]
+  
+  // Course orders
+  orders       Order[]
+  
+  // Video upload jobs
+  videoUploadJobs VideoUploadJob[]
+
+  @@map("courses")
+}
+
+model CourseModule {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  title       String
+  description String
+  duration    String
+  order       Int
+  objectives  String[] // Learning objectives for this module
+  courseId    String   @db.ObjectId
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Reference to course
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  
+  // Module lessons - stored as array
+  lessons     Lesson[]
+
+  @@map("course_modules")
+}
+
+model Lesson {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  title       String
+  description String
+  duration    String
+  
+  // Video fields
+  videoUrl    String?
+  videoUrls   Json?    // Store multiple quality URLs: { "420p": "url", "720p": "url", "1080p": "url" }
+  videoType   VideoType @default(UPLOAD)
+  
+  // HLS fields for chunked streaming
+  hlsMasterPlaylist String?  // Master playlist URL for HLS
+  hlsQualities      Json?    // HLS quality playlists: { "480p": "url", "720p": "url", "1080p": "url" }
+  
+  // PDF Lecture fields
+  pdfUrl      String?  // R2 URL for PDF
+  pdfPassword String?  // Encrypted password for protected PDFs
+  isPasswordProtected Boolean @default(false)
+  contentType ContentType @default(VIDEO) // VIDEO, PDF, or QUIZ
+  
+  // Quiz fields
+  quizData    Json?    // Quiz questions and answers stored as JSON
+  
+  order       Int
+  moduleId    String   @db.ObjectId
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Video metadata
+  originalWidth  Int?
+  originalHeight Int?
+  videoDuration  Float? // Duration in seconds
+  thumbnail      String? // Thumbnail URL
+
+  // Reference to module
+  module      CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  
+  // Lesson resources - stored as array
+  resources   LessonResource[]
+
+  @@map("lessons")
+}
+
+model LessonResource {
+  id       String       @id @default(auto()) @map("_id") @db.ObjectId
+  title    String
+  type     ResourceType
+  url      String
+  size     String?
+  lessonId String       @db.ObjectId
+  createdAt DateTime    @default(now())
+
+  // Reference to lesson
+  lesson   Lesson       @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@map("lesson_resources")
+}
+
+// User course enrollment - stores all user course data in array format
+model UserCourseEnrollment {
+  id              String            @id @default(auto()) @map("_id") @db.ObjectId
+  userId          String            @db.ObjectId
+  courseId        String            @db.ObjectId
+  enrolledAt      DateTime          @default(now())
+  expiresAt       DateTime
+  progress        Float             @default(0) // 0-100
+  completedLessons String[]         @db.ObjectId // Array of completed lesson IDs
+  lastAccessedAt  DateTime          @default(now())
+  status          EnrollmentStatus  @default(ACTIVE)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  // References
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course          Course            @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+  @@map("user_course_enrollments")
+}
+
+// Enums
+enum UserRole {
+  STUDENT
+  INSTRUCTOR
+  ADMIN
+}
+
+enum CourseLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum CourseStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ResourceType {
+  PDF
+  VIDEO
+  LINK
+  QUIZ
+  ASSIGNMENT
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  EXPIRED
+  SUSPENDED
+}
+
+enum VideoType {
+  UPLOAD
+  YOUTUBE
+}
+
+enum ContentType {
+  VIDEO
+  PDF
+  QUIZ
+}
+
+// Payment and Order Models
+model Order {
+  id                String        @id @default(auto()) @map("_id") @db.ObjectId
+  userId            String        @db.ObjectId
+  courseId          String        @db.ObjectId
+  
+  // Order details
+  amount            Float         // Total amount
+  currency          String        @default("usd")
+  
+  // Payment tracking
+  paymentIntentId   String?       @unique // Stripe Payment Intent ID
+  paymentStatus     PaymentStatus @default(PENDING)
+  
+  // Order status
+  orderStatus       OrderStatus   @default(PENDING)
+  
+  // Metadata
+  metadata          Json?         // Additional order data
+  
+  // Timestamps
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  paidAt            DateTime?     // When payment was confirmed
+  failedAt          DateTime?     // When payment failed
+  
+  // Relations
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course            Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  payments          Payment[]     // All payment attempts for this order
+  
+  @@index([userId])
+  @@index([courseId])
+  @@map("orders")
+}
+
+model Payment {
+  id                  String        @id @default(auto()) @map("_id") @db.ObjectId
+  orderId             String        @db.ObjectId
+  
+  // Stripe details
+  paymentIntentId     String        // Stripe Payment Intent ID
+  chargeId            String?       // Stripe Charge ID (after successful payment)
+  paymentMethodId     String?       // Stripe Payment Method ID
+  
+  // Payment details
+  amount              Float
+  currency            String        @default("usd")
+  status              PaymentStatus @default(PENDING)
+  
+  // Stripe invoice
+  invoiceUrl          String?       // Stripe invoice/receipt URL
+  invoicePdf          String?       // Stripe invoice PDF URL
+  
+  // Error tracking
+  errorMessage        String?       // Error message if payment failed
+  errorCode           String?       // Stripe error code
+  
+  // Metadata
+  stripeMetadata      Json?         // Full Stripe event data
+  
+  // Timestamps
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  
+  // Relations
+  order               Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  @@index([orderId])
+  @@index([paymentIntentId])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  PENDING           // Order created, payment not initiated
+  PROCESSING        // Payment is being processed by Stripe
+  SUCCEEDED         // Payment successful
+  FAILED            // Payment failed
+  CANCELED          // Payment canceled
+  REQUIRES_ACTION   // Requires additional customer action (3D Secure, etc.)
+}
+
+enum OrderStatus {
+  PENDING           // Order created, awaiting payment
+  PROCESSING        // Payment processing
+  COMPLETED         // Order completed, enrollment created
+  FAILED            // Order failed
+  CANCELED          // Order canceled
+  REFUNDED          // Order refunded
+}
+
+// Contact Form Model
+model Contact {
+  id          String        @id @default(auto()) @map("_id") @db.ObjectId
+  name        String        // Full name
+  email       String        // Contact email
+  phone       String?       // Optional phone number
+  subject     String        // Inquiry subject
+  message     String        // Detailed message
+  status      ContactStatus @default(NEW)
+  
+  // Metadata
+  ipAddress   String?       // For spam prevention
+  userAgent   String?       // Browser info
+  
+  // Timestamps
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  respondedAt DateTime?     // When admin responded
+  
+  @@index([email])
+  @@index([status])
+  @@map("contacts")
+}
+
+enum ContactStatus {
+  NEW
+  IN_PROGRESS
+  RESPONDED
+  CLOSED
+}
+
+// Partner Application Model (for teachers/instructors)
+model Partner {
+  id                String         @id @default(auto()) @map("_id") @db.ObjectId
+  name              String         // Full name
+  email             String         // Contact email
+  phone             String         // Phone number (required)
+  role              String         // Current role/position
+  expertise         String         // Area of expertise
+  experience        String         // Years of experience
+  linkedIn          String?        // LinkedIn profile URL
+  portfolio         String?        // Portfolio/website URL
+  teachingInterest  String         // What they want to teach
+  message           String         // Additional information
+  status            PartnerStatus  @default(NEW)
+  
+  // Metadata
+  ipAddress         String?        // For spam prevention
+  userAgent         String?        // Browser info
+  
+  // Timestamps
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  reviewedAt        DateTime?      // When admin reviewed
+  
+  @@index([email])
+  @@index([status])
+  @@map("partners")
+}
+
+enum PartnerStatus {
+  NEW
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  CONTACTED
+}
+
+// Video Upload Job Model - Tracks BullMQ job progress in database
+model VideoUploadJob {
+  id                  String              @id @default(auto()) @map("_id") @db.ObjectId
+  courseId            String?             @db.ObjectId // CRITICAL FIX: Make optional for new courses
+  lessonId            String              // Temporary lesson ID
+  userId              String?             @db.ObjectId // Optional until we have auth context
+  fileName            String
+  fileSize            Int                 // File size in bytes
+  moduleName          String?             // For display
+  lessonName          String?             // For display
+  
+  // Job status
+  status              VideoJobStatus      @default(QUEUED)
+  progress            Int                 @default(0) // 0-100
+  stage               String              @default("queued") // queued, uploading, transcoding_720p, etc.
+  message             String?
+  error               String?
+  
+  // BullMQ job ID
+  bullmqJobId         String              @unique
+  
+  // Queue position
+  queuePosition       Int?
+  
+  // Timestamps
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  completedAt         DateTime?
+  
+  // Result data (when completed)
+  videoUrls           Json?               // HLS quality playlists
+  thumbnailUrl        String?
+  masterPlaylistUrl   String?
+  
+  // Relations
+  course              Course?             @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user                User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  @@index([courseId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("video_upload_jobs")
+}
+
+enum VideoJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELED
+}

@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: riva_mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: riva_data
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - riva_network
+
+  redis:
+    image: redis:alpine
+    container_name: riva_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    networks:
+      - riva_network
+
+volumes:
+  mongodb_data:
+
+networks:
+  riva_network:
+    driver: bridge

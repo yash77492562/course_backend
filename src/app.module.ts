@@ -14,6 +14,7 @@ import { CacheHelperModule } from './cache/cache.module';
 import { PartnerModule } from './partner/partner.module';
 import { QueueModule } from './queues/queue.module';
 import { AuthModule } from './auth/auth.module';
+import { CreateContactModule } from './contact/ports/create-contact/create-contact.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { AuthModule } from './auth/auth.module';
     GatewayModule,
     PaymentModule,
     PartnerModule,
+    CreateContactModule, // Contact microservice module
   ],
 })
 export class AppModule {}

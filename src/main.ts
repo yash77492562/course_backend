@@ -98,6 +98,21 @@ async function bootstrap() {
   });
 
   const port = process.env.PORT || 3002;
+  
+  // Start Contact microservice on port 3030
+  console.log('📧 Starting Contact microservice on port 3030...');
+  app.connectMicroservice({
+    transport: 1, // Transport.TCP
+    options: {
+      host: 'localhost',
+      port: parseInt(process.env.CONTACT_CREATE_PORT) || 3030,
+    },
+  });
+  
+  // Start all microservices
+  await app.startAllMicroservices();
+  console.log('✅ All microservices started (Contact on port 3030)');
+  
   await app.listen(port);
   console.log(`🚀 Gateway running on: http://localhost:${port}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV }`);

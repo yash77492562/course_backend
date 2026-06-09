@@ -104,7 +104,7 @@ async function bootstrap() {
   app.connectMicroservice({
     transport: 1, // Transport.TCP
     options: {
-      host: 'localhost',
+      host: '0.0.0.0', // Bind to all interfaces (required for Docker)
       port: parseInt(process.env.CONTACT_CREATE_PORT) || 3030,
     },
   });

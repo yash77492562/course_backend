@@ -30,7 +30,7 @@ export class StripeService {
     }
 
     this.stripe = new Stripe(secretKey, {
-      apiVersion: '2026-03-25.dahlia',
+      apiVersion: '2026-02-25.clover' as any, // Match webhook API version from Dashboard
     });
   }
 
@@ -58,44 +58,17 @@ export class StripeService {
         throw new NotFoundException('Course not found');
       }
 
-      // Check if user already purchased this course OR has a pending order
+      // Check if user already purchased this course
       const existingOrder = await this.prisma.order.findFirst({
         where: {
           userId,
           courseId: createOrderDto.courseId,
-          OR: [
-            { paymentStatus: 'SUCCEEDED' },
-            { paymentStatus: 'PENDING' },
-          ],
+          paymentStatus: 'SUCCEEDED',
         },
       });
 
       if (existingOrder) {
-        if (existingOrder.paymentStatus === 'SUCCEEDED') {
-          throw new BadRequestException('You have already purchased this course');
-        }
-        
-        // If there's a pending order, delete associated payments first, then order
-        if (existingOrder.paymentStatus === 'PENDING') {
-          try {
-            // Delete payments first (foreign key constraint)
-            const deletedPayments = await this.prisma.payment.deleteMany({
-              where: { orderId: existingOrder.id },
-            });
-            
-            // Then delete the order (use deleteMany to avoid error if already deleted)
-            const deletedOrders = await this.prisma.order.deleteMany({
-              where: { id: existingOrder.id },
-            });
-            
-            if (deletedOrders.count > 0) {
-              console.log(`🗑️ Deleted pending order ${existingOrder.id} and ${deletedPayments.count} payments`);
-            }
-          } catch (error) {
-            // Order might have been deleted by another request, continue
-            console.log(`⚠️ Could not delete pending order (might be already deleted): ${error.message}`);
-          }
-        }
+        throw new BadRequestException('You have already purchased this course');
       }
 
       // Use CURRENT price from database (dynamic!)
@@ -205,85 +178,154 @@ export class StripeService {
 
   /**
    * Handle Stripe webhook events
+   * @param rawBody - Untouched Buffer from express.raw() middleware
+   * @param signature - Stripe signature header for HMAC verification
    */
   async handleStripeWebhook(rawBody: Buffer, signature: string) {
+    const startTime = Date.now();
+    
     try {
-      const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+      let webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
       if (!webhookSecret) {
-        throw new Error('STRIPE_WEBHOOK_SECRET is not defined');
+        console.error('❌ STRIPE_WEBHOOK_SECRET is not defined in environment');
+        throw new BadRequestException('Webhook configuration error - contact support');
       }
 
-      console.log('🔔 Webhook received - verifying signature...');
+      // Remove quotes if they exist (fix for .env parsing issue)
+      webhookSecret = webhookSecret.replace(/^["']|["']$/g, '').trim();
 
-      const event = this.stripe.webhooks.constructEvent(
-        rawBody,
-        signature,
-        webhookSecret,
-      );
+      console.log('🔔 Webhook received - verifying signature...');
+      console.log('  - Raw body is Buffer:', Buffer.isBuffer(rawBody));
+      console.log('  - Raw body length:', rawBody.length);
+      console.log('  - Signature present:', !!signature);
+      console.log('  - Webhook secret configured:', !!webhookSecret);
+
+      // Verify the event is recent (within 5 minutes)
+      // This prevents replay attacks and "timestamp outside tolerance zone" errors
+      let event: Stripe.Event;
+      
+      try {
+        // Pass Buffer directly to Stripe - NEVER call .toString()
+        event = this.stripe.webhooks.constructEvent(
+          rawBody,
+          signature,
+          webhookSecret,
+          300, // 5 minute tolerance (default is 300 seconds)
+        );
+      } catch (signatureError) {
+        // Provide detailed error information for debugging
+        console.error('❌ Signature verification failed:', signatureError.message);
+        
+        if (signatureError.message.includes('timestamp')) {
+          console.error('⏰ Timestamp issue - possible causes:');
+          console.error('  1. Server clock is incorrect (check with: date)');
+          console.error('  2. Event is too old (Stripe sent it more than 5 minutes ago)');
+          console.error('  3. Event was delayed in processing');
+          throw new BadRequestException('Webhook timestamp outside tolerance zone - event too old or server clock incorrect');
+        }
+        
+        if (signatureError.message.includes('signature')) {
+          console.error('🔑 Signature mismatch - possible causes:');
+          console.error('  1. Wrong webhook secret (check STRIPE_WEBHOOK_SECRET in .env)');
+          console.error('  2. Body was modified before verification');
+          console.error('  3. Using test/live secret mismatch');
+          throw new BadRequestException('Webhook signature verification failed - invalid signature');
+        }
+        
+        // Generic signature verification failure
+        throw new BadRequestException(`Webhook verification failed: ${signatureError.message}`);
+      }
 
       console.log(`✅ Webhook verified: ${event.type}`);
       console.log(`📦 Event ID: ${event.id}`);
-      console.log(`📦 Event data:`, JSON.stringify(event.data.object, null, 2));
+      console.log(`📅 Event created: ${new Date(event.created * 1000).toISOString()}`);
+      console.log(`🔢 API version: ${event.api_version || 'default'}`);
 
-      switch (event.type) {
-        case 'checkout.session.completed':
-          console.log('🎯 Processing checkout.session.completed...');
-          await this.successHandler.handleCheckoutSuccess(event.data.object);
-          break;
+      // Handle different event types
+      try {
+        switch (event.type) {
+          case 'checkout.session.completed':
+            console.log('🎯 Processing checkout.session.completed...');
+            await this.successHandler.handleCheckoutSuccess(event.data.object);
+            break;
 
-        case 'checkout.session.expired':
-          console.log('⏰ Processing checkout.session.expired...');
-          await this.cancelHandler.handleCheckoutExpired(event.data.object);
-          break;
+          case 'checkout.session.expired':
+            console.log('⏰ Processing checkout.session.expired...');
+            await this.cancelHandler.handleCheckoutExpired(event.data.object);
+            break;
 
-        case 'charge.succeeded':
-          console.log('🎯 Processing charge.succeeded...');
-          console.log('📦 Charge data:', JSON.stringify(event.data.object, null, 2));
-          await this.successHandler.handleChargeSuccess(event.data.object);
-          break;
+          case 'charge.succeeded':
+            console.log('🎯 Processing charge.succeeded...');
+            console.log('📦 Charge data:', JSON.stringify(event.data.object, null, 2));
+            await this.successHandler.handleChargeSuccess(event.data.object);
+            break;
 
-        case 'charge.updated':
-          console.log('🎯 Processing charge.updated...');
-          console.log('📦 Charge data:', JSON.stringify(event.data.object, null, 2));
-          await this.successHandler.handleChargeSuccess(event.data.object);
-          break;
+          case 'charge.updated':
+            console.log('🎯 Processing charge.updated...');
+            console.log('📦 Charge data:', JSON.stringify(event.data.object, null, 2));
+            await this.successHandler.handleChargeSuccess(event.data.object);
+            break;
 
-        case 'payment_intent.succeeded':
-          console.log('🎯 Processing payment_intent.succeeded...');
-          await this.successHandler.handlePaymentSuccess(event.data.object);
-          break;
+          case 'payment_intent.succeeded':
+            console.log('🎯 Processing payment_intent.succeeded...');
+            await this.successHandler.handlePaymentSuccess(event.data.object);
+            break;
 
-        case 'payment_intent.payment_failed':
-          console.log('❌ Processing payment_intent.payment_failed...');
-          await this.cancelHandler.handlePaymentFailed(event.data.object);
-          break;
+          case 'payment_intent.payment_failed':
+            console.log('❌ Processing payment_intent.payment_failed...');
+            await this.cancelHandler.handlePaymentFailed(event.data.object);
+            break;
 
-        case 'payment_intent.canceled':
-          console.log('🚫 Processing payment_intent.canceled...');
-          await this.cancelHandler.handlePaymentCanceled(event.data.object);
-          break;
+          case 'payment_intent.canceled':
+            console.log('🚫 Processing payment_intent.canceled...');
+            await this.cancelHandler.handlePaymentCanceled(event.data.object);
+            break;
 
-        case 'payment_intent.processing':
-          console.log('⏳ Processing payment_intent.processing...');
-          await this.processHandler.handlePaymentProcessing(event.data.object);
-          break;
+          case 'payment_intent.processing':
+            console.log('⏳ Processing payment_intent.processing...');
+            await this.processHandler.handlePaymentProcessing(event.data.object);
+            break;
 
-        case 'payment_intent.requires_action':
-          console.log('⚠️ Processing payment_intent.requires_action...');
-          await this.processHandler.handlePaymentRequiresAction(event.data.object);
-          break;
+          case 'payment_intent.requires_action':
+            console.log('⚠️ Processing payment_intent.requires_action...');
+            await this.processHandler.handlePaymentRequiresAction(event.data.object);
+            break;
 
-        default:
-          console.log(`ℹ️ Unhandled event type: ${event.type}`);
+          default:
+            console.log(`ℹ️ Unhandled event type: ${event.type}`);
+        }
+
+        const processingTime = Date.now() - startTime;
+        console.log(`✅ Webhook ${event.type} processed successfully in ${processingTime}ms`);
+        
+        return { 
+          received: true,
+          eventId: event.id,
+          eventType: event.type,
+          processingTime,
+        };
+        
+      } catch (handlerError) {
+        // Event was verified but handler failed - this is a 500 error not 400
+        console.error('❌ Event handler error:', handlerError);
+        console.error('❌ Handler error stack:', handlerError.stack);
+        console.error('📦 Event that failed:', JSON.stringify(event, null, 2));
+        
+        // Return 500 for handler errors (Stripe will retry)
+        throw new InternalServerErrorException(
+          `Event ${event.type} processing failed: ${handlerError.message}`
+        );
       }
-
-      console.log(`✅ Webhook ${event.type} processed successfully`);
-      return { received: true };
+      
     } catch (error) {
-      console.error('❌ Webhook error:', error);
-      console.error('❌ Error stack:', error.stack);
-      throw new BadRequestException('Webhook signature verification failed');
+      const processingTime = Date.now() - startTime;
+      console.error(`❌ Webhook failed after ${processingTime}ms`);
+      console.error('❌ Error:', error.message);
+      console.error('❌ Stack:', error.stack);
+      
+      // Re-throw the error (it's already a NestJS exception with proper status code)
+      throw error;
     }
   }
 
@@ -321,6 +363,49 @@ export class StripeService {
       },
       900 // 15 minutes cache
     );
+  }
+
+  /**
+   * Get order status for frontend polling (Step 5)
+   * Returns simple status: 'pending' | 'paid' | 'failed'
+   */
+  async getOrderStatus(orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        paymentStatus: true,
+        orderStatus: true,
+        paidAt: true,
+        failedAt: true,
+        amount: true,
+        currency: true,
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    // Map internal status to simple frontend status
+    let status: 'pending' | 'paid' | 'failed';
+    
+    if (order.paymentStatus === 'SUCCEEDED') {
+      status = 'paid';
+    } else if (order.paymentStatus === 'FAILED' || order.paymentStatus === 'CANCELED') {
+      status = 'failed';
+    } else {
+      status = 'pending';
+    }
+
+    return {
+      orderId: order.id,
+      status, // 'pending' | 'paid' | 'failed'
+      paidAt: order.paidAt,
+      failedAt: order.failedAt,
+      amount: order.amount,
+      currency: order.currency,
+    };
   }
 
   /**

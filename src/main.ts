@@ -12,14 +12,14 @@ import { refreshWorker } from './queues/workers/refresh.worker';
 import { maintenanceWorker } from './queues/workers/maintenance.worker';
 
 async function bootstrap() {
-  // Optimize NestJS for lower CPU usage
+  // Create NestJS app with raw body support for webhooks
   const app = await NestFactory.create(AppModule, {
     logger: process.env.NODE_ENV === 'production' 
       ? ['error', 'warn'] 
       : ['log', 'error', 'warn', 'debug'],
-    // Reduce overhead in development
     abortOnError: false,
-    bodyParser: true,
+    // Enable raw body for webhook signature verification
+    rawBody: true,
   });
   
   // Enable CORS for admin panel and Docker network
@@ -51,23 +51,26 @@ async function bootstrap() {
     credentials: true,
     exposedHeaders: ['Content-Length', 'Content-Range', 'Content-Type'],
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Range', 'x-user-id'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Range', 'x-user-id', 'stripe-signature'],
   });
 
-  // Increase body size limit for large video uploads (6GB)
-  // BUT preserve raw body for Stripe webhooks
-  app.use(
-    require('express').json({
-      limit: '6gb',
-      verify: (req: any, res: any, buf: Buffer) => {
-        // Store raw body for Stripe webhook signature verification
-        if (req.url === '/payment/stripe/webhook') {
-          req.rawBody = buf;
-        }
-      },
-    })
-  );
-  app.use(require('express').urlencoded({ limit: '6gb', extended: true }));
+  // Configure body size limits
+  // rawBody: true automatically preserves raw body for webhook verification
+  // Configure body size limits
+  const express = require('express');
+  
+  // Custom JSON parser with a verify function to safely capture the raw Buffer
+  app.use(express.json({ 
+    limit: '6gb',
+    verify: (req: any, res, buf) => {
+      // Only intercept the raw buffer for the Stripe webhook route
+      if (req.originalUrl && req.originalUrl.includes('/webhook')) {
+        req.rawBody = buf;
+      }
+    }
+  }));
+  
+  app.use(express.urlencoded({ limit: '6gb', extended: true }));
 
   // NOTE: No global prefix - routes are accessed directly (e.g., /auth/login, /courses/public)
   // This keeps dev and production consistent

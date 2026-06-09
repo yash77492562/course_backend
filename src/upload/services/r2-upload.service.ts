@@ -312,4 +312,24 @@ export class R2UploadService {
       throw new Error(`Failed to delete video from R2: ${error.message}`);
     }
   }
+
+  /**
+   * Generic file deletion method
+   * Works for videos, PDFs, thumbnails, and any other files
+   */
+  async deleteFile(key: string): Promise<void> {
+    try {
+      console.log(`🗑️ Deleting file from R2: ${key}`);
+      
+      await this.s3Client.send(new DeleteObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+      }));
+
+      console.log(`✅ File deleted from R2: ${key}`);
+    } catch (error) {
+      console.error(`❌ R2 delete failed for ${key}:`, error);
+      throw new Error(`Failed to delete file from R2: ${error.message}`);
+    }
+  }
 }

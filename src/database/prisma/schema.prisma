@@ -87,7 +87,12 @@ model Course {
   faqs         Json[]      // Frequently asked questions
   highlights   String[]    // Key highlights
   
-  status       CourseStatus @default(DRAFT)
+  // Draft/Publish System - Shopify-style
+  status          CourseStatus @default(DRAFT)
+  draftData       Json?        // Stores pending changes (admin only)
+  hasDraftChanges Boolean      @default(false) // Quick check for draft
+  lastPublishedAt DateTime?    // When it was last published
+  
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 

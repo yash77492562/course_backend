@@ -1,20 +1,29 @@
 import {
   Controller,
   Post,
+  Delete,
   Body,
   UseInterceptors,
   UploadedFile,
   HttpStatus,
   HttpException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UploadService } from '../services/upload.service';
 import { InitiateUploadDto, UploadChunkDto, YouTubeUploadDto } from '../dto/upload.dto';
+import { DeleteFileDto } from '../dto/delete-file.dto';
+import { R2UploadService } from '../services/r2-upload.service';
 
-@Controller('api/upload')
+@Controller('upload')
 export class UploadController {
-  constructor(private readonly uploadService: UploadService) {}
+  private readonly logger = new Logger(UploadController.name);
+
+  constructor(
+    private readonly uploadService: UploadService,
+    private readonly r2UploadService: R2UploadService,
+  ) {}
 
   @Post('initiate')
   async initiateUpload(@Body() dto: InitiateUploadDto) {
@@ -178,6 +187,43 @@ export class UploadController {
     } catch (error) {
       console.error('❌ Backend: Direct thumbnail upload failed:', error);
       throw new BadRequestException(error.message);
+    }
+  }
+
+  /**
+   * Delete file from R2 storage
+   * Used when removing videos, PDFs, or thumbnails from courses
+   */
+  @Delete('delete-file')
+  async deleteFile(@Body() dto: DeleteFileDto) {
+    try {
+      this.logger.log(`🗑️ Delete file request: ${dto.key}`);
+      
+      // Try to delete from R2
+      await this.r2UploadService.deleteFile(dto.key);
+      
+      this.logger.log(`✅ File deleted successfully: ${dto.key}`);
+      
+      return {
+        success: true,
+        message: 'File deleted successfully',
+      };
+    } catch (error) {
+      this.logger.error(`❌ Failed to delete file: ${dto.key}`, error);
+      
+      // If file doesn't exist in R2, that's okay - return success
+      if (error.message?.includes('NoSuchKey') || error.message?.includes('not found')) {
+        this.logger.warn(`⚠️ File not found in R2 (already deleted?): ${dto.key}`);
+        return {
+          success: true,
+          message: 'File not found (may have been already deleted)',
+        };
+      }
+      
+      // For other errors, throw exception
+      throw new BadRequestException(
+        `Failed to delete file: ${error.message || 'Unknown error'}`
+      );
     }
   }
 }

@@ -3,16 +3,21 @@ import {
   Post,
   Body,
   Headers,
-  RawBodyRequest,
   Req,
   HttpCode,
   HttpStatus,
   Get,
   Param,
+  BadRequestException,
 } from '@nestjs/common';
 import { StripeService } from '../services/service';
 import { CreateOrderDto } from '../dto/create-order';
 import { Request } from 'express';
+
+// Extend Express Request to include rawBody (added by NestJS with rawBody: true option)
+interface RequestWithRawBody extends Request {
+  rawBody?: Buffer;
+}
 
 @Controller('payment/stripe')
 export class StripeController {
@@ -42,6 +47,12 @@ export class StripeController {
     return this.stripeService.getOrder(orderId);
   }
 
+  // Get order status for polling (Step 5 - Order Status API)
+  @Get('order/:orderId/status')
+  async getOrderStatus(@Param('orderId') orderId: string) {
+    return this.stripeService.getOrderStatus(orderId);
+  }
+
   // Get user's orders
   @Get('orders/user/:userId')
   async getUserOrders(@Param('userId') userId: string) {
@@ -59,15 +70,66 @@ export class StripeController {
   @HttpCode(HttpStatus.OK)
   async handleStripeWebhook(
     @Headers('stripe-signature') signature: string,
-    @Req() req: RawBodyRequest<Request>,
+    @Req() req: RequestWithRawBody,
   ) {
+    // NestJS with rawBody: true provides req.rawBody as Buffer
+    // This is preserved even when body is parsed as JSON
     const rawBody = req.rawBody;
     
-    if (!rawBody) {
-      throw new Error('Raw body is required for webhook signature verification');
+    // Validate raw body exists and is a Buffer
+    if (!rawBody || !Buffer.isBuffer(rawBody)) {
+      console.error('❌ CRITICAL: Raw body is not a Buffer!');
+      console.error('  - rawBody exists:', !!rawBody);
+      console.error('  - rawBody type:', typeof rawBody);
+      console.error('  - rawBody is Buffer:', Buffer.isBuffer(rawBody));
+      console.error('  - rawBody constructor:', rawBody?.constructor?.name);
+      console.error('  - req.body exists:', !!req.body);
+      console.error('  - req.body type:', typeof req.body);
+      console.error('⚠️  NestJS rawBody option may not be enabled in main.ts');
+      console.error('⚠️  Ensure: NestFactory.create(AppModule, { rawBody: true })');
+      
+      throw new BadRequestException(
+        'Webhook configuration error: raw body required. Contact support.'
+      );
     }
 
+    // Validate signature header exists
+    if (!signature) {
+      console.error('❌ CRITICAL: Stripe signature header missing!');
+      console.error('  - Headers received:', Object.keys(req.headers).join(', '));
+      
+      throw new BadRequestException(
+        'Stripe signature header (stripe-signature) is required'
+      );
+    }
+
+    console.log('✅ Webhook prerequisites validated');
+    console.log(`  - Raw body: ${rawBody.length} bytes`);
+    console.log(`  - Signature: ${signature.substring(0, 20)}...`);
+
+    // Pass validated data to service
     return this.stripeService.handleStripeWebhook(rawBody, signature);
+  }
+
+  // Webhook health check endpoint for debugging
+  @Get('webhook/health')
+  async webhookHealthCheck() {
+    const hasWebhookSecret = !!process.env.STRIPE_WEBHOOK_SECRET;
+    const hasStripeKey = !!process.env.STRIPE_SECRET_KEY;
+    
+    return {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      config: {
+        webhookSecretConfigured: hasWebhookSecret,
+        stripeKeyConfigured: hasStripeKey,
+        nodeEnv: process.env.NODE_ENV,
+      },
+      instructions: {
+        testWebhook: 'Use Stripe CLI: stripe listen --forward-to http://localhost:3002/payment/stripe/webhook',
+        triggerTest: 'stripe trigger checkout.session.completed',
+      },
+    };
   }
 
   // Get payment status

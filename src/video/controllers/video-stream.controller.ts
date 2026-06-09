@@ -150,10 +150,22 @@ export class VideoStreamController {
         }
       } else if (line.trim().length > 0) {
         // This is a relative path
-        // Convert to absolute proxy path
-        const absolutePath = `${playlistDir}/${line.trim()}`;
+        const trimmedLine = line.trim();
+        
+        // Check if the relative path already starts with "videos/" (full path)
+        // This happens when FFmpeg generates playlists with full paths
+        let absolutePath;
+        if (trimmedLine.startsWith('videos/')) {
+          // It's already a full path, use it directly
+          absolutePath = trimmedLine;
+          console.log('  Using full path:', trimmedLine, '→', `/api/video/stream/${absolutePath}`);
+        } else {
+          // It's a true relative path, combine with directory
+          absolutePath = `${playlistDir}/${trimmedLine}`;
+          console.log('  Rewriting relative path:', trimmedLine, '→', `/api/video/stream/${absolutePath}`);
+        }
+        
         const proxyUrl = `/api/video/stream/${absolutePath}`;
-        console.log('  Rewriting relative path:', line, '→', proxyUrl);
         rewrittenLines.push(proxyUrl);
       } else {
         rewrittenLines.push(line);

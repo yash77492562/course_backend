@@ -94,6 +94,31 @@ export class CourseController {
     return ResponseDto.success('Lesson retrieved successfully', lesson);
   }
 
+  // Draft/Publish endpoints
+  @Post(':id/draft')
+  @HttpCode(HttpStatus.OK)
+  async saveDraft(
+    @Param('id') id: string,
+    @Body() draftData: any,
+  ) {
+    const course = await this.courseService.saveDraft(id, draftData);
+    return ResponseDto.success('Draft saved successfully', course);
+  }
+
+  @Post(':id/publish-draft')
+  @HttpCode(HttpStatus.OK)
+  async publishDraft(@Param('id') id: string) {
+    const course = await this.courseService.publishDraft(id);
+    return ResponseDto.success('Draft published successfully', course);
+  }
+
+  @Delete(':id/draft')
+  @HttpCode(HttpStatus.OK)
+  async discardDraft(@Param('id') id: string) {
+    const course = await this.courseService.discardDraft(id);
+    return ResponseDto.success('Draft discarded successfully', course);
+  }
+
   // Microservice message patterns
   @MessagePattern('course.create')
   async createCourseMessage(createCourseDto: CreateCourseDto) {

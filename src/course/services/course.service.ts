@@ -25,9 +25,10 @@ export class CourseService {
     console.log('📦 Received DTO:', JSON.stringify(createCourseDto, null, 2));
     
     // Extract modules and other nested data that need special handling
-    const { modules, faqs, ...courseData } = createCourseDto as any;
+    const { modules, ...courseData } = createCourseDto as any;
 
     console.log('📝 Creating course with basic data...');
+    console.log('📋 FAQs being saved:', courseData.faqs);
     
     // Create the course basic data first (excluding modules and nested relations)
     const createdCourse = await this.prisma.course.create({
@@ -373,7 +374,9 @@ export class CourseService {
     console.log(`📝 Course ID: ${id}`);
 
     // Extract modules and other nested data that need special handling
-    const { modules, faqs, ...courseData } = updateCourseDto as any;
+    const { modules, ...courseData } = updateCourseDto as any;
+
+    console.log('📋 FAQs being updated:', courseData.faqs);
 
     // Determine if this is a simple update (only course metadata) or complex (modules/lessons changed)
     const isSimpleUpdate = !modules || modules.length === 0;
@@ -784,6 +787,215 @@ export class CourseService {
         },
       },
     };
+  }
+
+  /**
+   * Save draft changes without affecting published version
+   * Shopify-style: stores changes in draftData field
+   */
+  async saveDraft(id: string, draftChanges: any): Promise<Course> {
+    const course = await this.prisma.course.findUnique({ where: { id } });
+    
+    if (!course) {
+      throw new NotFoundException(`Course with ID ${id} not found`);
+    }
+
+    console.log(`\n📝 ========== SAVING DRAFT CHANGES ==========`);
+    console.log(`Course ID: ${id}`);
+    console.log(`Current Status: ${course.status}`);
+
+    // Store changes in draftData without affecting published fields
+    const updatedCourse = await this.prisma.course.update({
+      where: { id },
+      data: {
+        draftData: draftChanges,
+        hasDraftChanges: true,
+        updatedAt: new Date(),
+      },
+      include: {
+        modules: {
+          orderBy: { order: 'asc' },
+          include: {
+            lessons: {
+              orderBy: { order: 'asc' },
+            },
+          },
+        },
+      },
+    });
+
+    console.log(`✅ Draft saved successfully`);
+    console.log(`📝 ========== DRAFT SAVE COMPLETE ==========\n`);
+
+    // Invalidate caches
+    await this.invalidateCourseCaches(id);
+
+    return updatedCourse;
+  }
+
+  /**
+   * Publish draft changes - merge draftData into main fields
+   * This makes draft changes visible to users
+   */
+  async publishDraft(id: string): Promise<Course> {
+    const course = await this.prisma.course.findUnique({ 
+      where: { id },
+      include: {
+        modules: true,
+      }
+    });
+    
+    if (!course) {
+      throw new NotFoundException(`Course with ID ${id} not found`);
+    }
+
+    if (!course.hasDraftChanges || !course.draftData) {
+      throw new Error('No draft changes to publish');
+    }
+
+    console.log(`\n🚀 ========== PUBLISHING DRAFT ==========`);
+    console.log(`Course ID: ${id}`);
+
+    const draftData = course.draftData as any;
+
+    // Extract modules and other nested data
+    const { modules: draftModules, ...courseFields } = draftData;
+
+    console.log('📋 Publishing FAQs:', courseFields.faqs);
+
+    // Delete existing modules if draft has modules
+    if (draftModules && Array.isArray(draftModules)) {
+      await this.prisma.courseModule.deleteMany({
+        where: { courseId: id },
+      });
+    }
+
+    // Update course with draft data and clear draft fields
+    const publishedCourse = await this.prisma.course.update({
+      where: { id },
+      data: {
+        ...courseFields,
+        status: CourseStatus.PUBLISHED,
+        draftData: null,
+        hasDraftChanges: false,
+        lastPublishedAt: new Date(),
+      },
+    });
+
+    // Create new modules from draft if present
+    if (draftModules && Array.isArray(draftModules)) {
+      for (const moduleData of draftModules) {
+        const { lessons, ...moduleInfo } = moduleData;
+        
+        const createdModule = await this.prisma.courseModule.create({
+          data: {
+            ...moduleInfo,
+            courseId: id,
+          },
+        });
+
+        // Create lessons for this module
+        if (lessons && Array.isArray(lessons)) {
+          for (const lessonData of lessons) {
+            // Check if lesson exists (from video upload)
+            if (lessonData.id && /^[0-9a-fA-F]{24}$/.test(lessonData.id)) {
+              const existingLesson = await this.prisma.lesson.findUnique({
+                where: { id: lessonData.id },
+              });
+              
+              if (existingLesson) {
+                // Update existing lesson
+                await this.prisma.lesson.update({
+                  where: { id: lessonData.id },
+                  data: {
+                    ...lessonData,
+                    moduleId: createdModule.id,
+                  },
+                });
+                continue;
+              }
+            }
+            
+            // Create new lesson
+            await this.prisma.lesson.create({
+              data: {
+                ...lessonData,
+                moduleId: createdModule.id,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    console.log(`✅ Draft published successfully`);
+    console.log(`🚀 ========== PUBLISH COMPLETE ==========\n`);
+
+    // Invalidate all caches
+    await this.invalidateCourseCaches(id);
+
+    // Queue refresh job for published course
+    await this.queueManagerService.addRefreshJob({
+      type: 'refresh_course_data',
+      courseId: id,
+      refreshType: 'full',
+    });
+
+    // Return updated course with relations
+    return this.prisma.course.findUnique({
+      where: { id },
+      include: {
+        modules: {
+          orderBy: { order: 'asc' },
+          include: {
+            lessons: {
+              orderBy: { order: 'asc' },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Discard draft changes - keep published version
+   * Users continue seeing published version
+   */
+  async discardDraft(id: string): Promise<Course> {
+    const course = await this.prisma.course.findUnique({ where: { id } });
+    
+    if (!course) {
+      throw new NotFoundException(`Course with ID ${id} not found`);
+    }
+
+    console.log(`\n🗑️  ========== DISCARDING DRAFT ==========`);
+    console.log(`Course ID: ${id}`);
+
+    const updatedCourse = await this.prisma.course.update({
+      where: { id },
+      data: {
+        draftData: null,
+        hasDraftChanges: false,
+      },
+      include: {
+        modules: {
+          orderBy: { order: 'asc' },
+          include: {
+            lessons: {
+              orderBy: { order: 'asc' },
+            },
+          },
+        },
+      },
+    });
+
+    console.log(`✅ Draft discarded successfully`);
+    console.log(`🗑️  ========== DISCARD COMPLETE ==========\n`);
+
+    // Invalidate caches
+    await this.invalidateCourseCaches(id);
+
+    return updatedCourse;
   }
 
   /**

@@ -12,7 +12,7 @@ import {
 import { UploadLockService } from '../services/upload-lock.service';
 import { QueueManagerService } from '../../queues/queue-manager.service';
 
-@Controller('api/upload')
+@Controller('upload')
 export class UploadStatusController {
   constructor(
     private readonly uploadLockService: UploadLockService,

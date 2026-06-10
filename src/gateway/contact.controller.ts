@@ -6,23 +6,12 @@ import {
   HttpStatus,
   Req,
 } from '@nestjs/common';
-import { ClientProxy, ClientProxyFactory, Transport } from '@nestjs/microservices';
-import { firstValueFrom } from 'rxjs';
 import { CreateContactDto } from '../contact/dto/create-contact.dto';
+import { ContactService } from '../contact/services/contact.service';
 
 @Controller('contact')
 export class ContactController {
-  private createContactClient: ClientProxy;
-
-  constructor() {
-    this.createContactClient = ClientProxyFactory.create({
-      transport: Transport.TCP,
-      options: {
-        host: 'localhost',
-        port: parseInt(process.env.CONTACT_CREATE_PORT) || 3030,
-      },
-    });
-  }
+  constructor(private readonly contactService: ContactService) {}
 
   /**
    * Submit contact form
@@ -38,9 +27,7 @@ export class ContactController {
         userAgent: req.headers['user-agent'],
       };
 
-      const result = await firstValueFrom(
-        this.createContactClient.send('contact.create', { dto, metadata })
-      );
+      const result = await this.contactService.createContact(dto, metadata);
 
       if (!result.success) {
         return {

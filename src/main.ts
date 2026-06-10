@@ -99,26 +99,18 @@ async function bootstrap() {
 
   const port = process.env.PORT || 3002;
   
-  // Configure Contact microservice BEFORE starting main app
-  console.log('📧 Configuring Contact microservice on port 3030...');
-  app.connectMicroservice({
-    transport: 1, // Transport.TCP
-    options: {
-      host: '0.0.0.0', // Bind to all interfaces (works for both Docker and local)
-      port: parseInt(process.env.CONTACT_CREATE_PORT) || 3030,
-    },
-  });
-  
-  // Start all microservices first
-  await app.startAllMicroservices();
-  console.log('✅ Microservices started (Contact on port 3030)');
-  
-  // Then start main HTTP gateway
+  // Start main HTTP gateway
   await app.listen(port);
   console.log(`🚀 Gateway running on: http://localhost:${port}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV }`);
   console.log(`📦 Max upload size: 6GB`);
   console.log(`🔄 BullMQ workers: ACTIVE`);
+  
+  // NOTE: Contact microservice temporarily disabled due to initialization conflicts
+  // Gateway proxies contact requests directly to ContactService
+  // This works on local but has Redis connection timing issues in Docker
+  console.log('📧 Contact form: Using direct service (microservice disabled)');
+
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {

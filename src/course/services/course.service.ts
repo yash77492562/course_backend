@@ -166,6 +166,13 @@ export class CourseService {
     });
     
     console.log('✅ Complete course fetched');
+
+    // CRITICAL: Invalidate course list caches so new course appears immediately
+    console.log('🗑️  Invalidating course list caches...');
+    await this.redisService.del('courses:all');
+    await this.redisService.del('courses:published');
+    console.log('✅ Course list caches invalidated');
+    
     console.log('💾 ========== END COURSE SERVICE ==========\n');
 
     return completeCourse;
@@ -1076,5 +1083,30 @@ export class CourseService {
         lessons: m.lessons,
       })),
     };
+  }
+
+  /**
+   * Invalidate all course-related caches
+   * Used by the cache refresh button in admin
+   */
+  async invalidateAllCourseCaches(): Promise<void> {
+    console.log('\n🗑️  ========== INVALIDATING ALL COURSE CACHES ==========');
+    
+    // Delete all course list caches
+    await this.redisService.del('courses:all');
+    console.log('✅ Deleted cache: courses:all');
+    
+    await this.redisService.del('courses:published');
+    console.log('✅ Deleted cache: courses:published');
+    
+    // Delete all course detail caches (pattern: course:detail:*)
+    const deletedCourses = await this.redisService.deletePattern('course:detail:*');
+    console.log(`✅ Deleted ${deletedCourses} course detail caches`);
+    
+    // Delete all lesson caches (pattern: lesson:*)
+    const deletedLessons = await this.redisService.deletePattern('lesson:*');
+    console.log(`✅ Deleted ${deletedLessons} lesson caches`);
+    
+    console.log('🗑️  ========== CACHE INVALIDATION COMPLETE ==========\n');
   }
 }

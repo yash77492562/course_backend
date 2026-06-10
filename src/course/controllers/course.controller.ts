@@ -94,6 +94,14 @@ export class CourseController {
     return ResponseDto.success('Lesson retrieved successfully', lesson);
   }
 
+  // Cache management endpoint
+  @Post('cache/invalidate')
+  @HttpCode(HttpStatus.OK)
+  async invalidateCache() {
+    await this.courseService.invalidateAllCourseCaches();
+    return ResponseDto.success('Course caches invalidated successfully');
+  }
+
   // Draft/Publish endpoints
   @Post(':id/draft')
   @HttpCode(HttpStatus.OK)
